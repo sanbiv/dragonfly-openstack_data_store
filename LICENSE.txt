@@ -1,4 +1,4 @@
-Copyright (c) 2013 Mark Evans
+Copyright (c) 2013 Santi Bivacqua (sanbiv@gmail.com)
 
 MIT License
 

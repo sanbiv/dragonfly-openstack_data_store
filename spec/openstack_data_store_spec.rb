@@ -1,15 +1,15 @@
+puts "WRITE TEST! WRITE TEST!"
+
+__END__
 require 'spec_helper'
-require 'dragonfly/spec/data_store_examples'
-require 'yaml'
-require 'dragonfly/s3_data_store'
 
-describe Dragonfly::S3DataStore do
+describe Dragonfly::OpenStackDataStore do
 
-  # To run these tests, put a file ".s3_spec.yml" in the dragonfly root dir, like this:
+  # To run these tests, put a file ".openstack_spec.yml" in the dragonfly root dir, like this:
   # key: XXXXXXXXXX
   # secret: XXXXXXXXXX
   # enabled: true
-  if File.exist?(file = File.expand_path('../../.s3_spec.yml', __FILE__))
+  if File.exist?(file = File.expand_path('../../.openstack_spec.yml', __FILE__))
     config = YAML.load_file(file)
     KEY = config['key']
     SECRET = config['secret']
@@ -24,7 +24,7 @@ describe Dragonfly::S3DataStore do
     BUCKET_NAME = "dragonfly-test-#{Time.now.to_i.to_s(36)}"
 
     before(:each) do
-      @data_store = Dragonfly::S3DataStore.new(
+      @data_store = Dragonfly::OpenStackDataStore.new(
         :bucket_name => BUCKET_NAME,
         :access_key_id => KEY,
         :secret_access_key => SECRET,
@@ -38,7 +38,7 @@ describe Dragonfly::S3DataStore do
 
     before(:each) do
       Fog.mock!
-      @data_store = Dragonfly::S3DataStore.new(
+      @data_store = Dragonfly::OpenStackDataStore.new(
         :bucket_name => BUCKET_NAME,
         :access_key_id => 'XXXXXXXXX',
         :secret_access_key => 'XXXXXXXXX',

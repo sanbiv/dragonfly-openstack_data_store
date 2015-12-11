@@ -1,0 +1,25 @@
+#!/usr/bin/env ruby
+
+require 'dragonfly/openstack_data_store'
+require 'irb'
+require 'yaml'
+
+yaml_config_file = File.expand_path('../../.openstack_spec.yml', __FILE__)
+
+puts yaml_config_file
+
+if File.exists?(yaml_config_file)
+  opts = YAML.load(File.read(yaml_config_file))['development']
+  #puts opts.inspect
+  puts 'Config loaded'
+  #exit
+  $app = Dragonfly.app.configure do
+    plugin :imagemagick
+
+    datastore :openstack_swift, opts
+  end
+end
+
+#$app.fetch_url("www.publicdomainpictures.net/pictures/20000/velka/dragonfly-1317422772YLc.jpg").thumb('300x300').store
+
+IRB.start
