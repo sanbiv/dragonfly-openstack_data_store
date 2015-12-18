@@ -103,7 +103,7 @@ module Dragonfly
     end
 
     def url_for(uid, opts={})
-      file = container.get(full_path(uid))
+      file = container.files.get(full_path(uid))
       return nil unless file
       file.public_url
       # URI::HTTP.build(scheme: options[:scheme] || connection.connection.service_scheme,
