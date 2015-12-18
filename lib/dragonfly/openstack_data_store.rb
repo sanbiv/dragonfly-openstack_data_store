@@ -95,7 +95,7 @@ module Dragonfly
     def destroy(uid)
       rescuing_socket_errors do
         file = container.files.get(full_path(uid))
-        raise Excon::Errors::NotFound unless file
+        raise Excon::Errors::NotFound.new("#{full_path(uid)} doesn't exist") unless file
         file.destroy
       end
     rescue Excon::Errors::NotFound, Excon::Errors::Conflict => e
