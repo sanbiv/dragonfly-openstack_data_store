@@ -83,20 +83,26 @@ module Dragonfly
 
     def read(uid)
       file = rescuing_socket_errors{ container.files.get(full_path(uid)) }
-      raise Excon::Errors::NotFound unless file
+      raise Excon::Errors::NotFound.new("#{uid} not found") unless file
       [
           file.body,                      # can be a String, File, Pathname, Tempfile
           headers_to_meta(file.metadata)  # the same meta Hash that was stored with write
       ]
     rescue Excon::Errors::NotFound => e
+      Dragonfly.warn("#{self.class.name} read error: #{e}")
       nil # return nil if not found
     end
 
     def destroy(uid)
       rescuing_socket_errors do
-        file = container.files.get(full_path(uid))
-        raise Excon::Errors::NotFound.new("#{full_path(uid)} doesn't exist") unless file
-        file.destroy
+        # file = container.files.get(full_path(uid))
+        # raise Excon::Errors::NotFound.new("#{full_path(uid)} doesn't exist") unless file
+        # file.destroy
+        begin
+          container.files.destroy(full_path(uid))
+        rescue
+          raise Excon::Errors::NotFound.new("#{full_path(uid)} doesn't exist")
+        end
       end
     rescue Excon::Errors::NotFound, Excon::Errors::Conflict => e
       Dragonfly.warn("#{self.class.name} destroy error: #{e}")
