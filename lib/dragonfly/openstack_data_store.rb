@@ -96,9 +96,13 @@ module Dragonfly
     def destroy(uid)
       rescuing_socket_errors do
         Thread.new do
-          file = container.files.get(full_path(uid))
-          raise Excon::Errors::NotFound.new("#{full_path(uid)} doesn't exist") unless file
-          file.destroy
+          begin
+            file = container.files.get(full_path(uid))
+            raise Excon::Errors::NotFound.new("#{full_path(uid)} doesn't exist") unless file
+            file.destroy
+          rescue Excon::Errors::NotFound, Excon::Errors::Conflict => e
+            Dragonfly.warn("#{self.class.name} destroy error: #{e}")
+          end
         end
         # begin
         #   container.files.destroy(full_path(uid))
@@ -106,8 +110,6 @@ module Dragonfly
         #   raise Excon::Errors::NotFound.new("#{full_path(uid)} doesn't exist")
         # end
       end
-    rescue Excon::Errors::NotFound, Excon::Errors::Conflict => e
-      Dragonfly.warn("#{self.class.name} destroy error: #{e}")
     end
 
     def url_for(uid, opts={})
