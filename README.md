@@ -14,9 +14,7 @@ It's just more robust.
 ## Gemfile
 
 ```ruby
-gem 'dragonfly-openstack_data_store',
-  git: 'https://github.com/sanbiv/dragonfly-openstack_data_store',
-  tag: 'v1.0.0'
+gem 'dragonfly-openstack_data_store', '~> 1.0.3', git: 'https://github.com/sanbiv/dragonfly-openstack_data_store'
 ```
 
 ## Usage
