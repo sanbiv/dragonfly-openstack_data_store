@@ -104,11 +104,17 @@ module Dragonfly
             Dragonfly.warn("#{self.class.name} destroy error: #{e}")
           end
         end
-        # begin
-        #   container.files.destroy(full_path(uid))
-        # rescue
-        #   raise Excon::Errors::NotFound.new("#{full_path(uid)} doesn't exist")
-        # end
+
+        # Thread.new do
+        #   begin
+        #     object_key = full_path(uid)
+        #     Dragonfly.info("Deleting object #{object_key} inside #{container.key} with Thread (pid: #{Process.pid}")
+        #     storage.delete_object(container.key, object_key)
+        #   rescue => e
+        #     Dragonfly.warn("#{object_key} doesn't exist, can't delete object: #{e.inspect}")
+        #     raise Excon::Errors::NotFound.new("#{object_key} doesn't exist")
+        #   end
+        # end.join
       end
     end
 
