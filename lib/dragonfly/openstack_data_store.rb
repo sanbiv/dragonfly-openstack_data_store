@@ -13,8 +13,8 @@ module Dragonfly
 
     attr_accessor :container_name,
                   :fog_storage_options, :openstack_options, :storage_headers,
-                  :access_control_allow_origin,
-                  :url_scheme, :url_host, :root_path
+                  :access_control_allow_origin, :default_expires_in,
+                  :url_scheme, :url_host, :url_port, :root_path
 
     def initialize(opts={})
       # case opts
@@ -33,21 +33,30 @@ module Dragonfly
       end
       fail "opts must contain :openstack & must be an Hash" unless opts.key?(:openstack) && opts[:openstack].is_a?(Hash)
 
-      @environment = opts.delete(:environment)
-      @container_name = opts[:container] || "dragonfly-system-#{environment}"
+      @environment         = opts.delete(:environment) || 'development'
+      @container_name      = if opts[:container]
+                               opts[:container]
+                             elsif defined?(::Rails)
+                               "#{Rails.application.class.name.split('::').first.underscore}-#{@environment}"
+                             else
+                               "dragonfly-system-#{@environment}"
+                             end
+
       @fog_storage_options = opts[:fog_storage_options] || {}
-      @openstack_options = opts[:openstack].inject({}) do |memo, item|
+      @openstack_options   = opts[:openstack].inject({}) do |memo, item|
         key, value = item
         memo[:"openstack_#{key}"] = value
         memo
       end
+      @default_expires_in = @openstack_options.delete(:openstack_temp_url_expires_in).to_i.nonzero? || 3600
 
       @access_control_allow_origin = opts[:access_control_allow_origin] || '*'
 
-      @storage_headers = opts[:storage_headers] || {}
-      @url_scheme = opts[:url_scheme] || 'http'
-      @url_host = opts[:url_host]
-      @root_path = opts[:root_path]
+      @storage_headers  = opts[:storage_headers] || {}
+      @url_scheme       = opts[:url_scheme] || 'http'
+      @url_host         = opts[:url_host]
+      @url_port         = opts[:url_port]
+      @root_path        = opts[:root_path]
     end
 
     def environment
@@ -119,27 +128,30 @@ module Dragonfly
     end
 
     def url_for(uid, opts={})
-      file = container.files.get(full_path(uid))
-      return nil unless file
-      file.public_url
-      # URI::HTTP.build(scheme: options[:scheme] || connection.connection.service_scheme,
-      #                 host: storage.connection.service_host,
-      #                 path: "#{storage.connection.service_path}/#{file.directory.key}/#{file.key}").to_s
-      # if expires = opts[:expires]
-      #   storage.get_object_https_url(container_name, full_path(uid), expires, {:query => opts[:query]})
-      # else
-      #   scheme = opts[:scheme] || url_scheme
-      #   host   = opts[:host]   || url_host || (
-      #     container_name =~ SUBDOMAIN_PATTERN ? "#{container_name}.s3.amazonaws.com" : "s3.amazonaws.com/#{container_name}"
-      #   )
-      #   "#{scheme}://#{host}/#{full_path(uid)}"
-      # end
+      file_key = full_path(uid)
+      expires_in = (opts[:expires_in].to_i.nonzero?) || @default_expires_in
+      expires_at = Time.now.to_i + expires_in
+
+      #file = container.files.get(file_key)
+      #return nil unless file
+      #file.url(expires_at)
+
+      opts = {
+          scheme: @url_scheme,
+          host:   @url_host,
+          port:   @url_port,
+      }.merge(opts)
+      method = opts[:scheme] == 'https' ? :get_object_https_url : :get_object_http_url
+      storage.send(method, container_name, file_key, expires_at, opts)
     end
 
     def storage
       @storage ||= begin
-        storage = Fog::Storage.new(full_storage_options)
-        storage
+        fog_storage = Fog::Storage.new(full_storage_options)
+        if @openstack_options[:openstack_temp_url_key]
+          fog_storage.post_set_meta_temp_url_key(@openstack_options[:openstack_temp_url_key])
+        end
+        fog_storage
       end
     end
 
