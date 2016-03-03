@@ -18,9 +18,12 @@ Gem::Specification.new do |spec|
   spec.test_files    = spec.files.grep(%r{^(test|spec|features)/})
   spec.require_paths = ["lib"]
 
+  spec.add_dependency "swift_client", '~> 0.1.2'
+  spec.add_dependency "fog-openstack", '~> 0.1.1'
+
   spec.add_runtime_dependency 'dragonfly', '~> 1.0'
   spec.add_runtime_dependency "mime-types", '>= 2.0', '< 3.0'
-  spec.add_dependency "fog-openstack", '~> 0.1.1'
+
   spec.add_development_dependency 'rspec', '~> 2.0'
 
   spec.post_install_message = <<-POST_INSTALL_MESSAGE

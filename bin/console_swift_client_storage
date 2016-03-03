@@ -1,0 +1,51 @@
+#!/usr/bin/env ruby
+
+require 'swift_client'
+require 'irb'
+require 'yaml'
+
+yaml_config_file = File.expand_path('../../.openstack_spec.yml', __FILE__)
+
+puts yaml_config_file
+
+if File.exists?(yaml_config_file)
+  opts = YAML.load(File.read(yaml_config_file))['development']
+
+  opts = opts.inject({}) do |memo, (k, v)|
+    memo[:"#{k}"] = v
+    memo
+  end
+  #puts opts.inspect
+  puts 'Config loaded'
+  #exit
+  # $app = Dragonfly.app.configure do
+  #   plugin :imagemagick
+  #
+  #   datastore :openstack_swift, opts
+  # end
+
+
+  $environment = opts.delete(:environment)
+  $container_name = opts[:container] || "dragonfly-system-#{$environment}"
+  # fog_storage_options = opts[:fog_storage_options] || {}
+  # openstack_options = opts[:openstack].inject({}) do |memo, item|
+  #   key, value = item
+  #   memo[:"openstack_#{key}"] = value
+  #   memo
+  # end
+
+  $openstack_options = opts[:openstack]
+
+  $swift_client = SwiftClient.new(
+      :auth_url => opts[:openstack]['auth_url'].gsub('auth/tokens', '').chomp('/'),
+      :username => opts[:openstack]['username'],
+      :password => opts[:openstack]['api_key'],
+      :domain_id => opts[:openstack]['domain_id'],
+      :temp_url_key => 'CiaoComeVa',
+      :storage_url => "https://dal.objectstorage.open.softlayer.com/v1/AUTH_#{opts[:openstack]['project_id']}"
+  )
+end
+
+#$app.fetch_url("www.publicdomainpictures.net/pictures/20000/velka/dragonfly-1317422772YLc.jpg").thumb('300x300').store
+
+IRB.start
