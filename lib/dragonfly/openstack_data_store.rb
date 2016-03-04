@@ -1,6 +1,7 @@
 require 'fog/openstack' #see https://github.com/fog/fog/blob/master/lib/fog/openstack/docs/storage.md
 require 'dragonfly'
 require 'cgi'
+require 'uri'
 require 'securerandom'
 
 Dragonfly::App.register_datastore(:openstack_swift){ Dragonfly::OpenStackDataStore }
@@ -15,6 +16,8 @@ module Dragonfly
                   :fog_storage_options, :openstack_options, :storage_headers,
                   :access_control_allow_origin, :default_expires_in,
                   :url_scheme, :url_host, :url_port, :root_path
+
+    attr_writer   :set_meta_temp_url_key_on_startup
 
     def initialize(opts={})
       # case opts
@@ -57,6 +60,11 @@ module Dragonfly
       @url_host         = opts[:url_host]
       @url_port         = opts[:url_port]
       @root_path        = opts[:root_path]
+      @set_meta_temp_url_key_on_startup = opts.fetch(:set_meta_temp_url_key_on_startup, false)
+    end
+
+    def set_meta_temp_url_key_on_startup?
+      @set_meta_temp_url_key_on_startup
     end
 
     def environment
@@ -128,6 +136,7 @@ module Dragonfly
     end
 
     def url_for(uid, opts={})
+      #ensure_meta_temp_url_key! if set_meta_temp_url_key_on_startup
       file_key = full_path(uid)
       expires_in = (opts[:expires_in].to_i.nonzero?) || @default_expires_in
       expires_at = Time.now.to_i + expires_in
@@ -142,17 +151,69 @@ module Dragonfly
           port:   @url_port,
       }.merge(opts)
       method = opts[:scheme] == 'https' ? :get_object_https_url : :get_object_http_url
-      storage.send(method, container_name, file_key, expires_at, opts)
+      url = storage.send(method, container_name, file_key, expires_at, opts)
+      if opts[:query]
+        opts[:query] = case opts[:query]
+                         when Hash, Array then URI.encode_www_form(opts[:query])
+                         else opts[:query].to_s
+                       end
+        url = "#{url}&#{opts[:query]}"
+      end
+      if opts[:inline]
+        url = "#{url}&inline"
+      end
+      url
     end
 
     def storage
       @storage ||= begin
-        fog_storage = Fog::Storage.new(full_storage_options)
-        if @openstack_options[:openstack_temp_url_key]
-          fog_storage.post_set_meta_temp_url_key(@openstack_options[:openstack_temp_url_key])
+        retry_times = 0
+        begin
+          fog_storage = ::Fog::Storage.new(full_storage_options)
+          retry_times = 0
+        rescue => e
+          Dragonfly.warn("#{e.class}: #{e.message} (#{retry_times < 10 ? ' RETRYING' : ''})")
+          retry if retry_times < 10
+        ensure
+          retry_times += 1
+        end
+        if @openstack_options[:openstack_temp_url_key] && set_meta_temp_url_key_on_startup?
+          set_meta_temp_url_key!(storage_instance: fog_storage)
         end
         fog_storage
       end
+
+      @storage
+    end
+
+    def set_meta_temp_url_key!(key = nil, force = false, storage_instance: nil)
+      return true if @_meta_temp_url_key_sent && !force
+      key ||= @openstack_options[:openstack_temp_url_key]
+      if key
+        begin
+          storage_instance ||= storage
+          storage_instance.post_set_meta_temp_url_key(@openstack_options[:openstack_temp_url_key])
+          # request(
+          #     :expects  => [201, 202, 204],
+          #     :method   => 'POST',
+          #     :headers  => {
+          #         'X-Account-Meta-Temp-Url-Key' => @openstack_options[:openstack_temp_url_key],
+          #         'X-Container-Meta-Access-Control-Allow-Origin' => '*'
+          #     }
+          # )
+
+          @_meta_temp_url_key_sent = true
+        rescue => e
+          Dragonfly.warn("#{e.class}: #{e.message}")
+          @_meta_temp_url_key_sent = false
+        end
+      end
+      @_meta_temp_url_key_sent
+    end
+    alias ensure_meta_temp_url_key! set_meta_temp_url_key!
+
+    def meta_temp_url_key_sent?
+      @_meta_temp_url_key_sent
     end
 
     def container

@@ -62,6 +62,7 @@ Dragonfly.app.configure do
                 temp_url_key:         ENV['OPENSTACK_TEMP_URL_KEY'] || credentials['temp_url_key'] || Rails.application.secrets['secret_key_base'],
                 temp_url_expires_in:  3600
             },
+            set_meta_temp_url_key_on_startup: true,
             url_scheme: 'https'
 
   # Override the .url method...

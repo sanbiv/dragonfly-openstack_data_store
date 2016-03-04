@@ -36,7 +36,8 @@ Dragonfly.app(:thumbnails).configure do
             container: "#{container_name}-thumbnails",
             access_control_allow_origin: '*',
             openstack: openstack_settings,
-            url_scheme: 'https'
+            url_scheme: 'https',
+            set_meta_temp_url_key_on_startup: true
 end
 
 Dragonfly.app.configure do
@@ -54,7 +55,8 @@ Dragonfly.app.configure do
             container: container_name,
             access_control_allow_origin: '*',
             openstack: openstack_settings,
-            url_scheme: 'https'
+            url_scheme: 'https',
+            set_meta_temp_url_key_on_startup: true
 
   # Override the .url method...
   define_url do |app, job, opts|

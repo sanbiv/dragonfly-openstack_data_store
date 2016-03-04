@@ -35,14 +35,34 @@ if File.exists?(yaml_config_file)
   end
   full_storage_options = openstack_options.merge(fog_storage_options.merge({:provider => 'OpenStack'}).
                                                      reject { |_name, value| value.nil? })
-  $fog_storage = Fog::Storage.new(full_storage_options)
+
+  retry_times = 0
+  begin
+    $fog_storage = Fog::Storage.new(full_storage_options)
+    retry_times = 0
+  rescue => e
+    puts("#{e.class}: #{e.message} (#{retry_times < 10 ? ' RETRYING' : ''})")
+    retry if retry_times < 10
+  ensure
+    retry_times += 1
+  end
   $container_name = container_name
   $fog_opts = opts
 end
 
 puts "TEMP URL KEY: #{opts[:openstack]['temp_url_key']}"
-$fog_storage.post_set_meta_temp_url_key(opts[:openstack]['temp_url_key'])
+#$fog_storage.post_set_meta_temp_url_key(opts[:openstack]['temp_url_key'])
 
+# $fog_storage.
+# request(
+#     :expects  => [201, 202, 204],
+#     :method   => 'POST',
+#     :headers  => {
+#         'X-Account-Meta-Temp-Url-Key'                => opts[:openstack]['temp_url_key'],
+#         'X-Account-Meta-Access-Control-Allow-Origin' => '*'
+#         #'X-Container-Meta-Access-Control-Allow-Origin' => '*'
+#     }
+# )
 # directory = $fog_storage.directories.first
 # file = directory.files.first
 # $fog_storage.get_object_http_url(directory.key, file.key, 1445414679, {:port => 8080})
