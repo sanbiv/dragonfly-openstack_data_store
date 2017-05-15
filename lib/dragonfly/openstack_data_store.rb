@@ -82,18 +82,22 @@ module Dragonfly
 
       headers = {'x-original-name' => content.name}
       headers.merge!(opts[:headers]) if opts[:headers]
-      rescuing_socket_errors do
-        #content.data....
-        content.file do |f|
-          container.files.create({
-                                     :key           => full_path(uid),
-                                     :body          => f,
-                                     :content_type  => content.mime_type,
-                                     :metadata      => full_storage_headers(headers, content.meta),
-                                     :access_control_allow_origin => access_control_allow_origin
-                                 })
+      # thread = Thread.new do
+      #   sleep 30
+        Dragonfly.info "Uploading #{content.name} (#{content.mime_type}) file on openstack swift"
+        rescuing_socket_errors do
+          #content.data....
+          content.file do |f|
+            container.files.create({
+                                       :key           => full_path(uid),
+                                       :body          => f,
+                                       :content_type  => content.mime_type,
+                                       :metadata      => full_storage_headers(headers, content.meta),
+                                       :access_control_allow_origin => access_control_allow_origin
+                                   })
+          end
         end
-      end
+      # end
 
       uid
     end
