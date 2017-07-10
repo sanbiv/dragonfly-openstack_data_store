@@ -170,16 +170,16 @@ module Dragonfly
     end
 
     def storage
+      retry_times = 0
       @storage ||= begin
-        retry_times = 0
         begin
           fog_storage = ::Fog::Storage.new(full_storage_options)
-          retry_times = 0
         rescue => e
-          Dragonfly.warn("#{e.class}: #{e.message} (#{retry_times < 10 ? ' RETRYING' : ''})")
-          retry if retry_times < 10
-        ensure
+          should_retry = retry_times < 10
+          Dragonfly.warn("#{e.class}: #{e.message} (#{should_retry ? " RETRYING #{retry_times}" : ''})")
           retry_times += 1
+          # puts "retrying #{retry_times}"
+          retry if should_retry
         end
         if @openstack_options[:openstack_temp_url_key] && set_meta_temp_url_key_on_startup?
           set_meta_temp_url_key!(storage_instance: fog_storage)
