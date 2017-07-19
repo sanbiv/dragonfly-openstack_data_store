@@ -1,13 +1,16 @@
-require 'fog/openstack' #see https://github.com/fog/fog/blob/master/lib/fog/openstack/docs/storage.md
+#require 'fog/openstack' #see https://github.com/fog/fog/blob/master/lib/fog/openstack/docs/storage.md
+require 'swift_client'
 require 'dragonfly'
 require 'cgi'
 require 'uri'
 require 'securerandom'
 
 Dragonfly::App.register_datastore(:openstack_swift){ Dragonfly::OpenStackDataStore }
+Thread.report_on_exception = true
 
 module Dragonfly
   class OpenStackDataStore
+    MAX_RETRY = 10
 
     # Exceptions
     #class NotConfigured < RuntimeError; end
@@ -45,13 +48,13 @@ module Dragonfly
                                "dragonfly-system-#{@environment}"
                              end
 
-      @fog_storage_options = opts[:fog_storage_options] || {}
+      # @fog_storage_options = opts[:fog_storage_options] || {}
       @openstack_options   = opts[:openstack].inject({}) do |memo, item|
         key, value = item
-        memo[:"openstack_#{key}"] = value
+        memo[key.to_sym] = value
         memo
       end
-      @default_expires_in = @openstack_options.delete(:openstack_temp_url_expires_in).to_i.nonzero? || 3600
+      @default_expires_in = @openstack_options.delete(:temp_url_expires_in).to_i.nonzero? || 3600
 
       @access_control_allow_origin = opts[:access_control_allow_origin] || '*'
 
@@ -84,58 +87,55 @@ module Dragonfly
       headers.merge!(opts[:headers]) if opts[:headers]
       # thread = Thread.new do
       #   sleep 30
-        Dragonfly.info "Uploading #{content.name} (#{content.mime_type}) file on openstack swift"
-        rescuing_socket_errors do
-          #content.data....
-          content.file do |f|
-            container.files.create({
-                                       :key           => full_path(uid),
-                                       :body          => f,
-                                       :content_type  => content.mime_type,
-                                       :metadata      => full_storage_headers(headers, content.meta),
-                                       :access_control_allow_origin => access_control_allow_origin
-                                   })
-          end
+      Dragonfly.info "Uploading #{content.name} (#{content.mime_type}) file on openstack swift"
+
+      rescuing_socket_errors do
+        #content.data....
+        content.file do |file_io|
+          # container.files.create({
+          #                            :key           => full_path(uid),
+          #                            :body          => f,
+          #                            :content_type  => content.mime_type,
+          #                            :metadata      => full_storage_headers(headers, content.meta),
+          #                            :access_control_allow_origin => access_control_allow_origin
+          #                        })
+          swift_client.put_object(full_path(uid),
+                                  file_io,
+                                  container_name,
+                                  full_storage_headers(headers, content.meta),
+                                  {
+                                    :access_control_allow_origin => access_control_allow_origin
+                                  })
         end
+      end
       # end
 
       uid
     end
 
     def read(uid)
-      file = rescuing_socket_errors{ container.files.get(full_path(uid)) }
-      raise Excon::Errors::NotFound.new("#{uid} not found") unless file
-      [
-          file.body,                      # can be a String, File, Pathname, Tempfile
-          headers_to_meta(file.metadata)  # the same meta Hash that was stored with write
-      ]
-    rescue Excon::Errors::NotFound => e
+      rescuing_socket_errors do
+        object = swift_client.get_object(full_path(uid), container_name)
+        # Dragonfly.debug "reading #{uid}: #{object.headers} #{object.parsed_response} -- #{object.body}"
+        [
+            object.body,                      # can be a String, File, Pathname, Tempfile
+            headers_to_meta(object.headers)   # the same meta Hash that was stored with write
+        ]
+      end
+    rescue => e
       Dragonfly.warn("#{self.class.name} read error: #{e}")
       nil # return nil if not found
     end
 
     def destroy(uid)
-      rescuing_socket_errors do
-        Thread.new do
+      Thread.new do
+        rescuing_socket_errors do
           begin
-            file = container.files.get(full_path(uid))
-            raise Excon::Errors::NotFound.new("#{full_path(uid)} doesn't exist") unless file
-            file.destroy
-          rescue Excon::Errors::NotFound, Excon::Errors::Conflict => e
+            swift_client.delete_object(full_path(uid), container_name)
+          rescue => e
             Dragonfly.warn("#{self.class.name} destroy error: #{e}")
           end
         end
-
-        # Thread.new do
-        #   begin
-        #     object_key = full_path(uid)
-        #     Dragonfly.info("Deleting object #{object_key} inside #{container.key} with Thread (pid: #{Process.pid}")
-        #     storage.delete_object(container.key, object_key)
-        #   rescue => e
-        #     Dragonfly.warn("#{object_key} doesn't exist, can't delete object: #{e.inspect}")
-        #     raise Excon::Errors::NotFound.new("#{object_key} doesn't exist")
-        #   end
-        # end.join
       end
     end
 
@@ -155,7 +155,10 @@ module Dragonfly
           port:   @url_port,
       }.merge(opts)
       method = opts[:scheme] == 'https' ? :get_object_https_url : :get_object_http_url
-      url = storage.send(method, container_name, file_key, expires_at, opts)
+
+      # Dragonfly.debug "file temp url #{uid} in #{container_name}"
+      url = temp_url(file_key, container_name, expires_in: opts.fetch(:expires_in) { openstack_options[:temp_url_expires_in] })
+
       if opts[:query]
         opts[:query] = case opts[:query]
                          when Hash, Array then URI.encode_www_form(opts[:query])
@@ -169,42 +172,69 @@ module Dragonfly
       url
     end
 
+
+    def temp_url(object_name, container_name, opts = {})
+      raise(SwiftClient::EmptyNameError) if object_name.empty? || container_name.empty?
+      raise(SwiftClient::TempUrlKeyMissing) unless openstack_options[:temp_url_key]
+      object_name == URI.escape(object_name)
+
+      expires = (Time.now + (opts[:expires_in] || 3600).to_i).to_i
+      uri = "#{swift_client.storage_url}/#{container_name}/#{object_name}"
+      # Dragonfly.debug "temp_url #{uri}"
+      path = URI.parse(uri).path
+
+      signature = OpenSSL::HMAC.hexdigest("sha1", openstack_options[:temp_url_key], "GET\n#{expires}\n#{path}")
+
+      "#{uri}?temp_url_sig=#{signature}&temp_url_expires=#{expires}"
+    end
+
     def storage
       retry_times = 0
       @storage ||= begin
         begin
-          fog_storage = ::Fog::Storage.new(full_storage_options)
+          # fog_storage = ::Fog::Storage.new(full_storage_options)
+          swift_client = SwiftClient.new(swift_client_options)
+          ensure_container_initialized(swift_client: swift_client)
         rescue => e
-          should_retry = retry_times < 10
+          should_retry = retry_times < MAX_RETRY
           Dragonfly.warn("#{e.class}: #{e.message} (#{should_retry ? " RETRYING #{retry_times}" : ''})")
           retry_times += 1
           # puts "retrying #{retry_times}"
           retry if should_retry
         end
-        if @openstack_options[:openstack_temp_url_key] && set_meta_temp_url_key_on_startup?
-          set_meta_temp_url_key!(storage_instance: fog_storage)
+        if openstack_options[:temp_url_key] && set_meta_temp_url_key_on_startup?
+          set_meta_temp_url_key!(swift_client: swift_client)
         end
-        fog_storage
+        swift_client
       end
 
       @storage
     end
+    alias :swift_client :storage
 
-    def set_meta_temp_url_key!(key = nil, force = false, storage_instance: nil)
+    def set_meta_temp_url_key!(key = nil, force = false, swift_client: nil)
       return true if @_meta_temp_url_key_sent && !force
-      key ||= @openstack_options[:openstack_temp_url_key]
+      key ||= openstack_options[:temp_url_key]
       if key
         begin
-          storage_instance ||= storage
-          storage_instance.post_set_meta_temp_url_key(@openstack_options[:openstack_temp_url_key])
-          # request(
-          #     :expects  => [201, 202, 204],
-          #     :method   => 'POST',
-          #     :headers  => {
-          #         'X-Account-Meta-Temp-Url-Key' => @openstack_options[:openstack_temp_url_key],
-          #         'X-Container-Meta-Access-Control-Allow-Origin' => '*'
-          #     }
-          # )
+          swift_client ||= self.swift_client
+          # storage_instance.post_set_meta_temp_url_key(openstack_options[:temp_url_key])
+
+          Thread.new do
+            headers_account = {
+                #'X-Account-Meta-Access-Control-Allow-Origin' => "*",
+                'X-Account-Meta-Temp-Url-Key' => key
+            }.compact
+            swift_client.post_account(headers_account)
+
+            if container_name
+              headers_container = {
+                  'X-Container-Meta-Access-Control-Allow-Origin' => "*",
+                  #'X-Container-Meta-Temp-Url-Key' => Rails.application.secrets.open_stack['temp_url_key'].presence
+              }.compact
+              swift_client.post_container(container_name, headers_container)
+            end
+          end
 
           @_meta_temp_url_key_sent = true
         rescue => e
@@ -220,24 +250,35 @@ module Dragonfly
       @_meta_temp_url_key_sent
     end
 
-    def container
-      ensure_container_initialized
-      @container ||= begin
-        rescuing_socket_errors{ storage.directories.get(container_name) }
-      end
-    end
+    # def container
+    #   ensure_container_initialized
+    #   @container ||= begin
+    #     rescuing_socket_errors{
+    #       storage.directories.get(container_name)
+    #     }
+    #   end
+    # end
 
-    def container_exists?
-      !rescuing_socket_errors{ storage.directories.get(container_name) }.nil?
-    rescue Excon::Errors::NotFound => e
-      false
+    def container_exists?(swift_client: nil)
+      _response = (swift_client || self.swift_client).head_container(container_name)
+      true
+    rescue SwiftClient::ResponseError => e
+      if e.code == 404
+        false
+      else
+        raise e
+      end
     end
 
     private
 
-    def ensure_container_initialized
+    def ensure_container_initialized(swift_client: nil)
       unless @container_initialized
-        rescuing_socket_errors{ storage.directories.create(:key => container_name) } unless container_exists?
+        rescuing_socket_errors {
+          # storage.directories.create(:key => container_name)
+          # Dragonfly.debug "Creo il container"
+          (swift_client || self.swift_client).put_container(container_name)
+        } unless container_exists?(swift_client: swift_client)
         @container_initialized = true
       end
     end
@@ -247,12 +288,29 @@ module Dragonfly
     end
 
     def full_path(uid)
-      File.join *[root_path, uid].compact
+      File.join *[root_path, URI.escape(uid)].compact
     end
 
-    def full_storage_options
-      openstack_options.merge(fog_storage_options.merge({:provider => 'OpenStack'}).
-                                  reject { |_name, value| value.nil? })
+    def auth_url
+      auth_url = openstack_options[:auth_url].gsub('auth/tokens', '').chomp('/')
+      auth_url = "#{auth_url}/v3" unless auth_url.end_with?('/v3')
+      auth_url
+    end
+
+    def swift_client_options #See https://github.com/mrkamel/swift_client
+      options = {
+        :auth_url => auth_url,
+        :username => openstack_options.fetch(:username),
+        # :user_id => credentials['userId'],
+        :password => openstack_options.fetch(:password) { openstack_options.fetch(:api_key) },
+        :user_domain_id => openstack_options.fetch(:domain_id),
+        :storage_url => openstack_options.fetch(:storage_url),
+        :temp_url_key => openstack_options.fetch(:temp_url_key)
+      }
+      options[:cache_store] = openstack_options[:cache_store] if openstack_options[:cache_store]
+      # Dragonfly.debug "#{container_name} options: #{options.inspect}"
+
+      options
     end
 
     def full_storage_headers(headers, meta)
@@ -273,12 +331,19 @@ module Dragonfly
       {'x-openstack-meta-json' => Serializer.json_encode(meta)}
     end
 
+    # SwiftClient will automatically reconnect in case the endpoint responds with 401 Unauthorized to one of your requests
+    # using the provided credentials. In case the endpoint does not respond with 2xx to any of SwiftClient's requests,
+    # SwiftClient will raise a SwiftClient::ResponseError. Otherwise,
+    # SwiftClient responds with an HTTParty::Response object,
+    # such that you can call #headers to access the response headers
+    # or #body as well as #parsed_response to access the response body and JSON response.
+    # Checkout the HTTParty gem to learn more
     def rescuing_socket_errors(&block)
       yield
-    rescue Excon::Errors::SocketError => e
-      storage.reload
-      @container = nil
-      yield
+    # rescue Excon::Errors::SocketError => e
+    #   storage.reload
+    #   @container = nil
+    #   yield
     end
 
     def escape_meta_values(meta)
