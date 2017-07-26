@@ -143,7 +143,7 @@ module Dragonfly
       #ensure_meta_temp_url_key! if set_meta_temp_url_key_on_startup
       file_key = full_path(uid)
       expires_in = (opts[:expires_in].to_i.nonzero?) || @default_expires_in
-      expires_at = Time.now.to_i + expires_in
+      # expires_at = Time.now.to_i + expires_in
 
       #file = container.files.get(file_key)
       #return nil unless file
@@ -183,7 +183,7 @@ module Dragonfly
       # Dragonfly.debug "temp_url #{uri}"
       path = URI.parse(uri).path
 
-      signature = OpenSSL::HMAC.hexdigest("sha1", openstack_options[:temp_url_key], "GET\n#{expires}\n#{path}")
+      signature = OpenSSL::HMAC.hexdigest("sha1", openstack_options[:temp_url_key], "GET\n#{expires}\n#{URI.unescape(path)}")
 
       "#{uri}?temp_url_sig=#{signature}&temp_url_expires=#{expires}"
     end
